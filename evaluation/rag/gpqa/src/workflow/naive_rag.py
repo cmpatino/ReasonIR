@@ -30,13 +30,17 @@ class NaiveRAG:
         self.cache = Cache(cfg)
         
     def run_search(self, data):
+        # Closed-book: skip any retrieval/search entirely
+        if getattr(self.cfg, 'closed_book', False) or getattr(self.cfg, 'top_k', 0) == 0:
+            return [None] * len(data)
+
         print("Performing Bing Web Searches for all questions...")
 
         # Initialize a list to hold relevant information for each question
         all_relevant_info = []
 
         if self.cfg.search_engine == 'offline_massiveds':
-            all_relevant_info = search_offline_cached_massiveds(data, self.cfg.top_k)        
+            all_relevant_info = search_offline_cached_massiveds(data, self.cfg.top_k)
         else:
             for item in tqdm(data, desc="Searching"):
                 question = item['Question']
@@ -46,15 +50,14 @@ class NaiveRAG:
                 else:
                     search_question = question
                     results, new_cache = search_api(
-                        self.cfg.search_engine, 
-                        search_question, 
-                        self.llm if self.search_llm is None else self.search_llm, 
+                        self.cfg.search_engine,
+                        search_question,
+                        self.llm if self.search_llm is None else self.search_llm,
                         self.cfg.model_path,
                         self.cfg.use_query_rewriting,
                         self.cache,
                         )
                     self.cache = new_cache
-                    # self.cache.search_cache[question] = results['searched_results']
                 all_relevant_info.append(results)
 
         # Save search cache after retrieval
@@ -63,6 +66,13 @@ class NaiveRAG:
         return all_relevant_info
     
     def get_naive_rag_instruction(self, question, documents):
+        # If closed-book, do not include a Documents section at all
+        if getattr(self.cfg, 'closed_book', False) or getattr(self.cfg, 'top_k', 0) == 0:
+            return (
+                "You are a knowledgeable assistant that answers the user's question.\n\n"
+                "Question:\n"
+                f"{question}\n"
+            )
         return (
             "You are a knowledgeable assistant that uses the provided documents to answer the user's question.\n\n"
             "Question:\n"
@@ -82,8 +92,16 @@ class NaiveRAG:
 
         for idx, item in enumerate(tqdm(data, desc="Constructing Prompts")):
             question = item['Question']
-            formatted_documents = format_document_string(self.cfg.search_engine, all_relevant_info[idx], self.cfg.top_k, max_doc_len=max_input_tokens)  # Increased document length
-            
+            if getattr(self.cfg, 'closed_book', False) or getattr(self.cfg, 'top_k', 0) == 0:
+                formatted_documents = ""
+            else:
+                formatted_documents = format_document_string(
+                    self.cfg.search_engine,
+                    all_relevant_info[idx],
+                    self.cfg.top_k,
+                    max_doc_len=max_input_tokens,
+                )
+
             instruction = self.get_naive_rag_instruction(question, formatted_documents)
             user_prompt = get_task_user_prompt(self.cfg.dataset_name, self.cfg.model_path, question)
             full_prompt = instruction + "\n\n" + user_prompt
@@ -98,9 +116,13 @@ class NaiveRAG:
         output_list = []
         for input_prompt in tqdm(input_prompts):
             try:
+                # Append think/no_think directive based on reasoning mode
+                reasoning_enabled = getattr(self.cfg, 'reasoning', False)
+                system_prompt = "You are a helpful assistant." + (" /think" if reasoning_enabled else " /no_think")
+
                 chat_completion = self.llm.chat.completions.create(
                     model=self.cfg.model_path,
-                    messages=[{"role": "system", "content": "You are a helpful assistant."},
+                    messages=[{"role": "system", "content": system_prompt},
                             {"role": "user", "content": input_prompt}],
                     max_tokens=8000,  # Increased to allow for longer outputs while staying within context limit
                     temperature=self.cfg.temperature,

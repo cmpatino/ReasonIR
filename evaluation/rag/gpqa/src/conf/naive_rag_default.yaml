@@ -19,3 +19,5 @@ top_k: 3
 max_doc_len: 10000
 search_engine: offline_massiveds
 use_query_rewriting: false
+closed_book: false
+reasoning: false  # Set true for reasoning models to append "/think"

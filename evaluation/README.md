@@ -53,6 +53,7 @@ export retrieval_file=$YOUR_RETRIEVAL_FILE  # refer to REAMDE for more details
 export raw_query_file=mmlu.jsonl  # refer to the original MMLU questions used for retrieval
 bash evaluation/rag/mmlu_cot/scripts/eval_llama_3_8b_mmlu_rag.sh
 ```
+To enable reasoning models (append "/think" to the system prompt), set `reasoning=1` inside the script or add `--reasoning` directly when running `evaluate_from_local_mmlu.py`.
 
 ### GPQA
 
@@ -73,5 +74,6 @@ PYTHONPATH=. python src/main.py \
     search_engine=offline_massiveds \
     use_query_rewriting=false \
     dataset_name=gpqa \
-    split=diamond
+    split=diamond \
+    reasoning=true   # set false for non-reasoning models ("/no_think")
 ```

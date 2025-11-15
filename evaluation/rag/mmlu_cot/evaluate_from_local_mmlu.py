@@ -56,7 +56,11 @@ def preprocess(test_df):
 
 
 def args_generate_path(input_args):
-    scoring_method = "CoT"
+    # Reflect whether this run is RAG-CoT or Closed-Book CoT in the save path
+    if getattr(input_args, 'closed_book', False) or input_args.retrieval_file is None or input_args.concat_k == 0:
+        scoring_method = "CoT"
+    else:
+        scoring_method = "RAG-CoT"
     model_name = input_args.model.split("/")[-1]
     subjects = args.selected_subjects.replace(",", "-").replace(" ", "_")
     concat_k = f'Concat_{args.concat_k}'
@@ -257,7 +261,9 @@ def eval_cot(subject, model, tokenizer, val_df, test_df, output_path):
         assert k == 0, "Error: MMLU does not have CoT fewshot examples."
         curr = test_df[i]
         prompt = generate_cot_prompt(val_df, curr, k)
-        message = [{"role": "system", "content": "You are a helpful assistent."}, {"role": "user", "content": prompt}]
+        # Append think/no_think directive based on reasoning mode
+        system_prompt = "You are a helpful assistent." + (" /think" if getattr(args, 'reasoning', False) else " /no_think")
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
         prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
         inference_batches.append(prompt)
 
@@ -286,7 +292,9 @@ def eval_rag_cot(subject, model, tokenizer, val_df, test_df, output_path, hashed
         assert k == 0, "Error: MMLU does not have CoT fewshot examples."
         curr = test_df[i]
         prompt = generate_rag_cot_prompt(val_df, curr, k, hashed_retrieval_results)
-        message = [{"role": "system", "content": "You are a helpful assistent."}, {"role": "user", "content": prompt}]
+        # Append think/no_think directive based on reasoning mode
+        system_prompt = "You are a helpful assistent." + (" /think" if getattr(args, 'reasoning', False) else " /no_think")
+        message = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
         prompt = tokenizer.apply_chat_template(message, add_generation_prompt=True, tokenize=False)
         inference_batches.append(prompt)
 
@@ -329,8 +337,8 @@ def main():
         assert subject in subject_to_group.keys(), subject
         print(subject_to_group[subject])
     
-    # Load retrieval file
-    use_rag = args.retrieval_file is not None and args.concat_k > 0
+    # Load retrieval file (allow explicit closed-book override)
+    use_rag = (not getattr(args, 'closed_book', False)) and (args.retrieval_file is not None and args.concat_k > 0)
     if use_rag:
         hashed_retrieval_results = get_hashed_retrieval_results(args.retrieval_file, args.concat_k, args.raw_query_file)
     
@@ -405,6 +413,10 @@ if __name__ == "__main__":
     parser.add_argument("--raw_query_file", type=str, default=None, 
                         help="Pass the original query to this argument, where the order of the query matches the reasoning query in the retrieval_file.")
     parser.add_argument("--concat_k", type=int, default=0)
+    parser.add_argument("--closed_book", action="store_true", default=False,
+                        help="Force closed-book evaluation (ignore retrieval inputs).")
+    parser.add_argument("--reasoning", action="store_true", default=False,
+                        help="Enable reasoning mode to append '/think' to the system prompt (otherwise '/no_think').")
 
     args = parser.parse_args()
     os.makedirs(args.save_dir, exist_ok=True)
@@ -428,5 +440,3 @@ if __name__ == "__main__":
                                   logging.StreamHandler(sys.stdout)])
 
     main()
-
-

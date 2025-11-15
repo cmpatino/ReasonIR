@@ -6,6 +6,15 @@ model="meta-llama/Meta-Llama-3.1-8B-Instruct"
 selected_subjects="all"
 gpu_util=0.95
 
+# Set to 1 to enable reasoning mode (appends "/think" to system prompt)
+reasoning=0
+
+
+if [ "$reasoning" = "1" ]; then
+  reasoning_flag="--reasoning"
+else
+  reasoning_flag=""
+fi
 
 CUDA_VISIBLE_DEVICES=0 python evaluate_from_local_mmlu.py \
                  --selected_subjects $selected_subjects \
@@ -15,4 +24,5 @@ CUDA_VISIBLE_DEVICES=0 python evaluate_from_local_mmlu.py \
                  --gpu_util $gpu_util \
                  --retrieval_file $retrieval_file \
                  --raw_query_file $raw_query_file \
-                 --concat_k 3
+                 --concat_k 3 \
+                 $reasoning_flag
