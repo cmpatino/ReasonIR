@@ -9,7 +9,7 @@ import string
 import os, time
 from collections import defaultdict
 
-from src.lcb_runner.evaluation import codegen_metrics
+# from src.lcb_runner.evaluation import codegen_metrics
 from src.utils.math_equivalence import is_equiv
 
 
