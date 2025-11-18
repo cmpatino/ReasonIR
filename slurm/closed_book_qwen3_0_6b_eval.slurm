@@ -1,14 +1,16 @@
 #!/bin/bash
+#SBATCH --partition=gpu_mig
 #SBATCH --job-name=cb-qwen3-0_6b-evals
-#SBATCH --output=cb-qwen3-0_6b-evals.%j.out
-#SBATCH --error=cb-qwen3-0_6b-evals.%j.err
-#SBATCH --partition=gpu
+#SBATCH --output=./logs_eval/cb-qwen3-0_6b-evals.%j.out
+#SBATCH --error=./logs_eval/cb-qwen3-0_6b-evals.%j.err
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
 
 set -euo pipefail
+
+source .venv/bin/activate
 
 ## User-configurable variables
 MODEL="Qwen/Qwen3-0.6B"
@@ -31,7 +33,9 @@ python -m vllm.entrypoints.openai.api_server \
   --port "$PORT" \
   --tensor-parallel-size 1 \
   --trust-remote-code \
-  > vllm_server_${SLURM_JOB_ID:-manual}.log 2>&1 &
+  --max_model-len 16392 \
+  --gpu_memory_utilization 0.9 \
+  > ./logs_eval/vllm_server_${SLURM_JOB_ID:-manual}.log 2>&1 &
 VLLM_PID=$!
 
 cleanup() {
@@ -43,7 +47,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Waiting for server to become ready..."
-sleep 25
+sleep 150
 
 echo "Running GPQA (closed-book, reasoning)"
 pushd evaluation/rag/gpqa > /dev/null
