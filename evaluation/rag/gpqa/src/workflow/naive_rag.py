@@ -120,15 +120,22 @@ class NaiveRAG:
                 reasoning_enabled = getattr(self.cfg, 'reasoning', False)
                 system_prompt = "You are a helpful assistant." + (" /think" if reasoning_enabled else " /no_think")
 
-                chat_completion = self.llm.chat.completions.create(
+                generation_kwargs = dict(
                     model=self.cfg.model_path,
                     messages=[{"role": "system", "content": system_prompt},
-                            {"role": "user", "content": input_prompt}],
+                              {"role": "user", "content": input_prompt}],
                     max_tokens=8000,  # Increased to allow for longer outputs while staying within context limit
                     temperature=self.cfg.temperature,
                     top_p=self.cfg.top_p,
                     frequency_penalty=self.cfg.repetition_penalty,
                 )
+                # Allow optional sampling controls if present in config
+                if getattr(self.cfg, 'top_k', None) is not None:
+                    generation_kwargs['top_k'] = self.cfg.top_k
+                if getattr(self.cfg, 'min_p', None) is not None:
+                    generation_kwargs['min_p'] = self.cfg.min_p
+
+                chat_completion = self.llm.chat.completions.create(**generation_kwargs)
                 output_list.append(chat_completion.choices[0].message.content)
             except Exception as e:
                 print(f"Error during generation: {str(e)}")

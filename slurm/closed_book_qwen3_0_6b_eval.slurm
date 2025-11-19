@@ -52,12 +52,11 @@ sleep 150
 echo "Running GPQA (closed-book, reasoning)"
 pushd evaluation/rag/gpqa > /dev/null
 PYTHONPATH=. python src/main.py \
-  --config-name naive_rag_default \
+  --config-name qwen_3_think \
   model_path="$MODEL" \
   llm_endpoint="http://${NODE_IP}:${PORT}/v1" \
   dataset_name=gpqa \
   split=diamond \
-  top_k=0 \
   closed_book=true \
   search_engine=offline_massiveds \
   use_query_rewriting=false \
@@ -67,12 +66,11 @@ popd > /dev/null
 echo "Running GPQA (closed-book, non-reasoning)"
 pushd evaluation/rag/gpqa > /dev/null
 PYTHONPATH=. python src/main.py \
-  --config-name naive_rag_default \
+  --config-name qwen_3_no-think \
   model_path="$MODEL" \
   llm_endpoint="http://${NODE_IP}:${PORT}/v1" \
   dataset_name=gpqa \
   split=diamond \
-  top_k=0 \
   closed_book=true \
   search_engine=offline_massiveds \
   use_query_rewriting=false \
