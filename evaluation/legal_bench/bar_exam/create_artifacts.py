@@ -1,14 +1,15 @@
 # Embedding datastore creation below
 import argparse
+import json
 import os
 
-import faiss
 import numpy as np
 import pandas as pd
 import torch
 from huggingface_hub import hf_hub_download
 from tqdm.auto import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel
+from sklearn.metrics import ndcg_score
 
 
 def _mean_pool(
@@ -25,14 +26,10 @@ def _mean_pool(
 
 
 def encode_passages(
-    model_name: str,
+    model,
     texts: list[str],
     batch_size: int = 4,
 ) -> np.ndarray:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModel.from_pretrained(model_name, torch_dtype="auto", trust_remote_code=True).to(device)
-    model.eval()
-
     embeddings = []
 
     for start in tqdm(range(0, len(texts), batch_size), desc="Encoding passages"):
@@ -46,22 +43,34 @@ def encode_passages(
     return embeddings
 
 
-def build_faiss_index(embeddings: np.ndarray) -> faiss.IndexFlatIP:
-    faiss.normalize_L2(embeddings)
-    index = faiss.IndexFlatIP(embeddings.shape[1])
-    index.add(embeddings)
-    return index
+def _ensure_cache_dir(cache_dir: str) -> None:
+    os.makedirs(cache_dir, exist_ok=True)
 
 
-def persist_artifacts(
-    index: faiss.IndexFlatIP, ids: list[str], index_path: str, ids_path: str
-) -> None:
-    os.makedirs(os.path.dirname(index_path), exist_ok=True)
-    faiss.write_index(index, index_path)
+def _cache_path(cache_dir: str, model_name: str, suffix: str) -> str:
+    safe_model = model_name.replace("/", "_")
+    cache_subdir = os.path.join(cache_dir, suffix)
+    os.makedirs(cache_subdir, exist_ok=True)
+    return os.path.join(cache_subdir, f"{safe_model}.npy")
 
-    with open(ids_path, "w") as f:
-        for passage_id in ids:
-            f.write(f"{passage_id}\n")
+
+def load_or_encode(
+    model,
+    texts: list[str],
+    batch_size: int,
+    cache_dir: str,
+    model_name: str,
+    suffix: str,
+) -> np.ndarray:
+    cache_file = _cache_path(cache_dir, model_name, suffix)
+    if os.path.exists(cache_file):
+        print(f"Loading cached embeddings from {cache_file}")
+        return np.load(cache_file)
+
+    embeddings = encode_passages(model, texts, batch_size=batch_size)
+    np.save(cache_file, embeddings)
+    print(f"Saved embeddings cache to {cache_file}")
+    return embeddings
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +104,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    cache_dir = os.path.join(".", "cached embeddings")
+    _ensure_cache_dir(cache_dir)
+
     passages_local_path = hf_hub_download(
         repo_id="reglab/barexam_qa",
         filename="data/passages/test.tsv",
@@ -111,6 +123,7 @@ def main() -> None:
 
     passages_df = pd.read_csv(passages_local_path, sep="\t")[["idx", "text"]]
     qa_df = pd.read_csv(qa_local_path)[["prompt", "question", "gold_idx"]]
+    qa_df["prompt"] = qa_df["prompt"].fillna("")
 
     # Check all the gold passages are in the passages dataset
     merged_df = qa_df.merge(
@@ -125,12 +138,46 @@ def main() -> None:
     print(f"Number of QA pairs: {qa_df.shape[0]}")
     print(f"Number of Passages: {passages_df.shape[0]}")
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = AutoModel.from_pretrained(
+        args.model_name, torch_dtype="auto", trust_remote_code=True
+    ).to(device)
+    model.eval()
+
     texts = passages_df["text"].tolist()
-    embeddings = encode_passages(args.model_name, texts, batch_size=args.batch_size)
-    index = build_faiss_index(embeddings)
-    persist_artifacts(
-        index, passages_df["idx"].tolist(), args.index_path, args.ids_path
+    text_embeddings = load_or_encode(
+        model,
+        texts,
+        batch_size=args.batch_size,
+        cache_dir=cache_dir,
+        model_name=args.model_name,
+        suffix="passages",
     )
+    query_embeddings = load_or_encode(
+        model,
+        (qa_df["prompt"] + " " + qa_df["question"]).tolist(),
+        batch_size=args.batch_size,
+        cache_dir=cache_dir,
+        model_name=args.model_name,
+        suffix="queries",
+    )
+
+    scores = np.matmul(query_embeddings, text_embeddings.T)
+
+    gold_indices = [
+        passages_df[passages_df["idx"] == gid].index[0] for gid in qa_df["gold_idx"]
+    ]
+    gold_relevance = np.zeros_like(scores)
+    for i, gid in enumerate(gold_indices):
+        gold_relevance[i, gid] = 1
+
+    ndcg = ndcg_score(gold_relevance, scores, k=10)
+    print(f"NDCG@10 of the encoded passages: {ndcg:.4f}")
+
+    results_path = os.path.join(".", "evaluation_results.json")
+    with open(results_path, "w", encoding="utf-8") as f:
+        json.dump({"model": args.model_name, "ndcg@10": float(ndcg)}, f, indent=2)
+    print(f"Saved evaluation results to {results_path}")
 
 
 if __name__ == "__main__":
