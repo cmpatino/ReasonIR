@@ -30,7 +30,7 @@ def encode_passages(
     batch_size: int = 4,
 ) -> np.ndarray:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModel.from_pretrained(model_name).to(device)
+    model = AutoModel.from_pretrained(model_name, torch_dtype="auto").to(device)
     model.eval()
 
     embeddings = []
@@ -40,8 +40,9 @@ def encode_passages(
 
         with torch.no_grad():
             outputs = model.encode(batch_texts, instruction="")
+            embs = _mean_pool(outputs.last_hidden_state, outputs.attention_mask).cpu()
 
-        embeddings.append(outputs.cpu())
+        embeddings.append(embs)
 
     return torch.vstack(embeddings).numpy()
 
