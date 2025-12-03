@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from datetime import datetime
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -13,21 +14,24 @@ from transformers import AutoModel
 from sklearn.metrics import ndcg_score
 
 
-def _mean_pool(
-    last_hidden_state: torch.Tensor, attention_mask: torch.Tensor
-) -> torch.Tensor:
-    """Average non-masked token embeddings to get a sentence embedding."""
+def _reasonir_encode(model, texts: list[str]) -> np.ndarray:
+    return model.encode(texts, instruction="")
 
-    input_mask_expanded = (
-        attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-    )
-    sum_embeddings = (last_hidden_state * input_mask_expanded).sum(dim=1)
-    sum_mask = input_mask_expanded.sum(dim=1).clamp(min=1e-9)
-    return sum_embeddings / sum_mask
+
+ENCODER_MAP: dict[str, Callable] = {
+    "reasonir/ReasonIR-8B": _reasonir_encode,
+}
+
+
+def _select_encoder(model_name: str) -> Callable:
+    if model_name in ENCODER_MAP:
+        return ENCODER_MAP[model_name]
+    raise ValueError(f"Unsupported model for encoding: {model_name}")
 
 
 def encode_passages(
     model,
+    encoder: Callable,
     texts: list[str],
     batch_size: int = 4,
 ) -> np.ndarray:
@@ -37,7 +41,7 @@ def encode_passages(
         batch_texts = texts[start : start + batch_size]
 
         with torch.no_grad():
-            outputs = model.encode(batch_texts, instruction="")
+            outputs = encoder(model, batch_texts)
 
         embeddings.append(outputs)
     embeddings = np.concatenate(embeddings, axis=0)
@@ -62,13 +66,14 @@ def load_or_encode(
     cache_dir: str,
     model_name: str,
     suffix: str,
+    encoder: Callable,
 ) -> np.ndarray:
     cache_file = _cache_path(cache_dir, model_name, suffix)
     if os.path.exists(cache_file):
         print(f"Loading cached embeddings from {cache_file}")
         return np.load(cache_file)
 
-    embeddings = encode_passages(model, texts, batch_size=batch_size)
+    embeddings = encode_passages(model, texts, batch_size=batch_size, encoder=encoder)
     np.save(cache_file, embeddings)
     print(f"Saved embeddings cache to {cache_file}")
     return embeddings
@@ -87,18 +92,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Number of passages to encode per batch",
-    )
-    parser.add_argument(
-        "--index-path",
-        type=str,
-        default="data/passages/test.index",
-        help="Where to store the FAISS index",
-    )
-    parser.add_argument(
-        "--ids-path",
-        type=str,
-        default="data/passages/test_ids.txt",
-        help="Where to store passage ids aligned with FAISS order",
     )
     return parser.parse_args()
 
@@ -145,6 +138,8 @@ def main() -> None:
     ).to(device)
     model.eval()
 
+    encoder = _select_encoder(args.model_name)
+
     texts = passages_df["text"].tolist()
     text_embeddings = load_or_encode(
         model,
@@ -153,6 +148,7 @@ def main() -> None:
         cache_dir=cache_dir,
         model_name=args.model_name,
         suffix="passages",
+        encoder=encoder,
     )
     query_embeddings = load_or_encode(
         model,
@@ -161,6 +157,7 @@ def main() -> None:
         cache_dir=cache_dir,
         model_name=args.model_name,
         suffix="queries",
+        encoder=encoder,
     )
 
     scores = np.matmul(query_embeddings, text_embeddings.T)
