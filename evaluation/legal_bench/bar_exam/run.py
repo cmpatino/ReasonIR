@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -174,7 +175,14 @@ def main() -> None:
     ndcg = ndcg_score(gold_relevance, scores, k=10)
     print(f"NDCG@10 of the encoded passages: {ndcg:.4f}")
 
-    results_path = os.path.join(".", "evaluation_results.json")
+    outputs_dir = os.path.join(".", "outputs")
+    os.makedirs(outputs_dir, exist_ok=True)
+
+    safe_model = args.model_name.replace("/", "_")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_filename = f"evaluation_results_{safe_model}_{timestamp}.json"
+    results_path = os.path.join(outputs_dir, results_filename)
+
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump({"model": args.model_name, "ndcg@10": float(ndcg)}, f, indent=2)
     print(f"Saved evaluation results to {results_path}")
