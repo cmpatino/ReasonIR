@@ -177,7 +177,7 @@ def main() -> None:
 
     safe_model = args.model_name.replace("/", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_filename = f"evaluation_results_{safe_model}_{timestamp}.json"
+    results_filename = f"{safe_model}_{timestamp}.json"
     results_path = os.path.join(outputs_dir, results_filename)
 
     with open(results_path, "w", encoding="utf-8") as f:
