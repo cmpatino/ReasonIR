@@ -41,10 +41,19 @@ def _bge_encode(model, texts: list[str], tokenizer) -> np.ndarray:
     return embeddings.cpu().numpy()
 
 
+def _distilbert_encode(model, texts: list[str], tokenizer) -> np.ndarray:
+    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    embeddings = model(**inputs)[0][:, 0, :].squeeze(0)
+    return embeddings.cpu().numpy()
+
+
 ENCODER_MAP: dict[str, Callable] = {
     "reasonir/ReasonIR-8B": _reasonir_encode,
     "facebook/contriever-msmarco": _contriever_encode,
     "BAAI/bge-m3": _bge_encode,
+    "sebastian-hofstaetter/distilbert-dot-tas_b-b256-msmarco": _distilbert_encode,
 }
 
 
@@ -62,6 +71,7 @@ SCORER_MAP: dict[str, Callable[[np.ndarray, np.ndarray], np.ndarray]] = {
     "reasonir/ReasonIR-8B": _cosine_similarity,
     "facebook/contriever-msmarco": _dot_product,
     "BAAI/bge-m3": _dot_product,
+    "sebastian-hofstaetter/distilbert-dot-tas_b-b256-msmarco": _dot_product,
 }
 
 
