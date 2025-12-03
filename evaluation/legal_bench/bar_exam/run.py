@@ -133,7 +133,8 @@ def encode_passages(
         with torch.no_grad():
             outputs = encoder(model, batch_texts, tokenizer)
 
-        embeddings.append(outputs)
+        n_texts = len(batch_texts)
+        embeddings.append(outputs.reshape(n_texts, -1))
     embeddings = np.concatenate(embeddings, axis=0)
     return embeddings
 
