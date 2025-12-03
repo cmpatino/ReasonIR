@@ -12,6 +12,7 @@ from huggingface_hub import hf_hub_download
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoTokenizer
 from sklearn.metrics import ndcg_score
+from FlagEmbedding import BGEM3FlagModel
 
 
 def _reasonir_encode(model, texts: list[str], tokenizer) -> np.ndarray:
@@ -32,9 +33,18 @@ def _contriever_encode(model, texts: list[str], tokenizer) -> np.ndarray:
     return embeddings.cpu().numpy()
 
 
+def _bge_encode(model, texts: list[str], tokenizer) -> np.ndarray:
+    embeddings = model.encode(
+        texts,
+        max_length=8192,
+    )["dense_vecs"]
+    return embeddings.cpu().numpy()
+
+
 ENCODER_MAP: dict[str, Callable] = {
     "reasonir/ReasonIR-8B": _reasonir_encode,
     "facebook/contriever-msmarco": _contriever_encode,
+    "BAAI/bge-m3": _bge_encode,
 }
 
 
@@ -51,6 +61,7 @@ def _dot_product(queries: np.ndarray, passages: np.ndarray) -> np.ndarray:
 SCORER_MAP: dict[str, Callable[[np.ndarray, np.ndarray], np.ndarray]] = {
     "reasonir/ReasonIR-8B": _cosine_similarity,
     "facebook/contriever-msmarco": _dot_product,
+    "BAAI/bge-m3": _dot_product,
 }
 
 
@@ -70,6 +81,16 @@ def _select_scorer(model_name: str) -> Callable[[np.ndarray, np.ndarray], np.nda
     if model_name in SCORER_MAP:
         return SCORER_MAP[model_name]
     raise ValueError(f"Unsupported model for scoring: {model_name}")
+
+
+def _get_model(model_name: str):
+    if model_name.startswith("BGE"):
+        model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+    else:
+        model = AutoModel.from_pretrained(
+            model_name, torch_dtype="auto", trust_remote_code=True
+        )
+    return model
 
 
 def encode_passages(
@@ -180,9 +201,8 @@ def main() -> None:
     print(f"Number of Passages: {passages_df.shape[0]}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = AutoModel.from_pretrained(
-        args.model_name, torch_dtype="auto", trust_remote_code=True
-    ).to(device)
+    model = _get_model(args.model_name)
+    model.to(device)
     model.eval()
 
     tokenizer = AutoTokenizer.from_pretrained(
