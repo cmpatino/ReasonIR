@@ -108,6 +108,15 @@ def _select_scorer(model_name: str) -> Callable[[np.ndarray, np.ndarray], np.nda
     raise ValueError(f"Unsupported model for scoring: {model_name}")
 
 
+def _recall_at_k(scores: np.ndarray, gold_indices: list[int], k: int = 10) -> float:
+    if scores.shape[1] < k:
+        k = scores.shape[1]
+    top_k_indices = np.argpartition(-scores, kth=k - 1, axis=1)[:, :k]
+    gold_array = np.array(gold_indices)
+    hits = (top_k_indices == gold_array[:, None]).any(axis=1)
+    return float(hits.mean())
+
+
 def _get_model(model_name: str):
     if model_name.startswith("BGE"):
         model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
@@ -269,7 +278,9 @@ def main() -> None:
         gold_relevance[i, gid] = 1
 
     ndcg = ndcg_score(gold_relevance, scores, k=10)
+    recall = _recall_at_k(scores, gold_indices, k=10)
     print(f"NDCG@10 of the encoded passages: {ndcg:.4f}")
+    print(f"Recall@10 of the encoded passages: {recall:.4f}")
 
     outputs_dir = os.path.join(".", "outputs")
     os.makedirs(outputs_dir, exist_ok=True)
@@ -280,7 +291,11 @@ def main() -> None:
     results_path = os.path.join(outputs_dir, results_filename)
 
     with open(results_path, "w", encoding="utf-8") as f:
-        json.dump({"model": args.model_name, "ndcg@10": float(ndcg)}, f, indent=2)
+        json.dump(
+            {"model": args.model_name, "ndcg@10": float(ndcg), "recall@10": recall},
+            f,
+            indent=2,
+        )
     print(f"Saved evaluation results to {results_path}")
 
 
