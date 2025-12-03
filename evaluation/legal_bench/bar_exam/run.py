@@ -10,17 +10,54 @@ import pandas as pd
 import torch
 from huggingface_hub import hf_hub_download
 from tqdm.auto import tqdm
-from transformers import AutoModel
+from transformers import AutoModel, AutoTokenizer
 from sklearn.metrics import ndcg_score
 
 
-def _reasonir_encode(model, texts: list[str]) -> np.ndarray:
+def _reasonir_encode(model, texts: list[str], tokenizer) -> np.ndarray:
     return model.encode(texts, instruction="")
+
+
+def _contriever_encode(model, texts: list[str], tokenizer) -> np.ndarray:
+    # Apply tokenizer
+    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    # Compute token embeddings
+    outputs = model(**inputs)
+
+    # Mean pooling
+    embeddings = mean_pooling(outputs[0], inputs["attention_mask"])
+    return embeddings.cpu().numpy()
 
 
 ENCODER_MAP: dict[str, Callable] = {
     "reasonir/ReasonIR-8B": _reasonir_encode,
+    "facebook/contriever-msmarco": _contriever_encode,
 }
+
+
+def _cosine_similarity(queries: np.ndarray, passages: np.ndarray) -> np.ndarray:
+    q_norm = queries / (np.linalg.norm(queries, axis=1, keepdims=True) + 1e-12)
+    p_norm = passages / (np.linalg.norm(passages, axis=1, keepdims=True) + 1e-12)
+    return np.matmul(q_norm, p_norm.T)
+
+
+def _dot_product(queries: np.ndarray, passages: np.ndarray) -> np.ndarray:
+    return np.matmul(queries, passages.T)
+
+
+SCORER_MAP: dict[str, Callable[[np.ndarray, np.ndarray], np.ndarray]] = {
+    "reasonir/ReasonIR-8B": _cosine_similarity,
+    "facebook/contriever-msmarco": _dot_product,
+}
+
+
+def mean_pooling(token_embeddings, mask):
+    token_embeddings = token_embeddings.masked_fill(~mask[..., None].bool(), 0.0)
+    sentence_embeddings = token_embeddings.sum(dim=1) / mask.sum(dim=1)[..., None]
+    return sentence_embeddings
 
 
 def _select_encoder(model_name: str) -> Callable:
@@ -29,8 +66,15 @@ def _select_encoder(model_name: str) -> Callable:
     raise ValueError(f"Unsupported model for encoding: {model_name}")
 
 
+def _select_scorer(model_name: str) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    if model_name in SCORER_MAP:
+        return SCORER_MAP[model_name]
+    raise ValueError(f"Unsupported model for scoring: {model_name}")
+
+
 def encode_passages(
     model,
+    tokenizer,
     encoder: Callable,
     texts: list[str],
     batch_size: int = 4,
@@ -41,7 +85,7 @@ def encode_passages(
         batch_texts = texts[start : start + batch_size]
 
         with torch.no_grad():
-            outputs = encoder(model, batch_texts)
+            outputs = encoder(model, batch_texts, tokenizer)
 
         embeddings.append(outputs)
     embeddings = np.concatenate(embeddings, axis=0)
@@ -61,6 +105,7 @@ def _cache_path(cache_dir: str, model_name: str, suffix: str) -> str:
 
 def load_or_encode(
     model,
+    tokenizer,
     texts: list[str],
     batch_size: int,
     cache_dir: str,
@@ -73,7 +118,9 @@ def load_or_encode(
         print(f"Loading cached embeddings from {cache_file}")
         return np.load(cache_file)
 
-    embeddings = encode_passages(model, texts, batch_size=batch_size, encoder=encoder)
+    embeddings = encode_passages(
+        model, tokenizer, encoder, texts, batch_size=batch_size
+    )
     np.save(cache_file, embeddings)
     print(f"Saved embeddings cache to {cache_file}")
     return embeddings
@@ -138,11 +185,16 @@ def main() -> None:
     ).to(device)
     model.eval()
 
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name, use_fast=True, trust_remote_code=True
+    )
     encoder = _select_encoder(args.model_name)
+    scorer = _select_scorer(args.model_name)
 
     texts = passages_df["text"].tolist()
     text_embeddings = load_or_encode(
         model,
+        tokenizer,
         texts,
         batch_size=args.batch_size,
         cache_dir=cache_dir,
@@ -152,6 +204,7 @@ def main() -> None:
     )
     query_embeddings = load_or_encode(
         model,
+        tokenizer,
         (qa_df["prompt"] + " " + qa_df["question"]).tolist(),
         batch_size=args.batch_size,
         cache_dir=cache_dir,
@@ -160,7 +213,7 @@ def main() -> None:
         encoder=encoder,
     )
 
-    scores = np.matmul(query_embeddings, text_embeddings.T)
+    scores = scorer(query_embeddings, text_embeddings)
 
     gold_indices = [
         passages_df[passages_df["idx"] == gid].index[0] for gid in qa_df["gold_idx"]
